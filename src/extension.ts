@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 /**
- * Extension to enhance Vim extension's wrapped line cursor movements.
+ * Extension to enhance Vim/Neovim extension's wrapped line cursor movements.
  * Fixes cursor column tracking with wrapped lines and avoids
  * leaving the cursor at the very end of wrapped lines.
  */
@@ -103,8 +103,6 @@ class WrappedLineMover {
     }
 
     private async getWrappedLineBounds(editor: vscode.TextEditor): Promise<[number, number]> {
-        // Actually not sure why this doesn't need to be reverted back.
-        // Probably from vim's code (?)
         editor.options.cursorStyle = vscode.TextEditorCursorStyle.LineThin;
 
         const originalSelection = editor.selection;
@@ -116,6 +114,8 @@ class WrappedLineMover {
         const endChar = editor.selection.active.character;
 
         await this.updateSelection(editor, originalSelection);
+        editor.options.cursorStyle = vscode.TextEditorCursorStyle.Block;
+
         return [startChar, endChar];
     }
 
