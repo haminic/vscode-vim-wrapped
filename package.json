@@ -1,7 +1,7 @@
 {
-  "name": "cursor-move-test",
-  "displayName": "cursor-move-test",
-  "description": "",
+  "name": "vim_wrapped",
+  "displayName": "Vim Wrapped",
+  "description": "Adds commands for better line wrapped vim motions.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.102.0"
@@ -12,7 +12,16 @@
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
-    "commands": []
+    "commands": [
+      {
+        "command": "vimWrapped.cursorDown",
+        "title": "Vim Wrapped: Move Down"
+      },
+      {
+        "command": "vimWrapped.cursorUp",
+        "title": "Vim Wrapped: Move Up"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

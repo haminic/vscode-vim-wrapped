@@ -1,45 +1,75 @@
 import * as vscode from 'vscode';
 
 export function activate(context: vscode.ExtensionContext) {
+	const mover = new WrappedLineMover();
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("vim.lineWrappedDown", () => moveCursorLineWrapped("down")),
-		vscode.commands.registerCommand("vim.lineWrappedUp", () => moveCursorLineWrapped("up"))
+		vscode.commands.registerCommand("vimWrapped.cursorDown", async () => {
+			await mover.moveCursorLineWrapped("down");
+		}),
+		vscode.commands.registerCommand("vimWrapped.cursorUp", async () => {
+			await mover.moveCursorLineWrapped("up");
+		}),
+		// Support for my vim-qol fork.
+		vscode.commands.registerCommand("vimWrapped.safeType", async (args) => {
+			await mover.doSafeMove(async () => {
+				await vscode.commands.executeCommand("vim.type", args);
+			});
+		})
 	);
 
-	registerListeners(context);
+	mover.registerListeners(context);
 }
 
 export function deactivate() {}
 
-/** State Management */
+class WrappedLineMover {
+	private desiredColumn: number = 0;
+	private isMoving: boolean = false;
+	private programmaticMoveCounter: number = 0;
+	private safeMoveCounter: number = 0;
 
-let desiredColumn: number = 0;
-let isMoving: boolean = false;
-let programmaticMoveCounter = 0;
+	private isInProgrammaticMove(): boolean {
+		return this.programmaticMoveCounter > 0;
+	}
 
-function beginProgrammaticMove() {
-	programmaticMoveCounter++;
-}
+	private isInSafeMove(): boolean {
+		return this.safeMoveCounter > 0;
+	}
 
-function endProgrammaticMove() {
-	programmaticMoveCounter = Math.max(0, programmaticMoveCounter - 1);
-}
+	private async doProgrammaticMove(action: () => Promise<void>) {
+		try {
+			this.programmaticMoveCounter++;
+			await action();
+		} finally {
+			this.programmaticMoveCounter = Math.max(0, this.programmaticMoveCounter - 1);
+		}
+	}
 
-function isInProgrammaticMove() {
-	return programmaticMoveCounter > 0;
-}
+	public async doSafeMove(action: () => Promise<void>) {
+		try {
+			this.programmaticMoveCounter++;
+			await action();
+		} finally {
+			this.programmaticMoveCounter = Math.max(0, this.programmaticMoveCounter - 1);
+		}
+	}
 
-/** Main Functions */
 
-async function moveCursorLineWrapped(direction: "down" | "up") {
-	const editor = vscode.window.activeTextEditor;
-	if (!editor || !isSingleSelection(editor)) { return; }
+	private async doDefaultCursorMove(to: string) {
+		await this.doProgrammaticMove(async () => {
+			await vscode.commands.executeCommand(
+				"cursorMove",
+				{ "to": to, "by": "wrappedLine" }
+			);
+		});
+	}
 
-	try {
-		beginProgrammaticMove();
+	public async moveCursorLineWrapped(direction: "down" | "up") {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor || !isSingleSelection(editor)) { return; }
 
-		const [wrapStart, wrapEnd] = await getWrappedLineBeginEnd(editor);	
+		const [wrapStart, wrapEnd] = await this.getWrappedLineBeginEnd(editor);	
 		const currentLine = editor.selection.active.line;
 		const totalLines = editor.document.lineCount;
 		const lineLength = editor.document
@@ -51,51 +81,35 @@ async function moveCursorLineWrapped(direction: "down" | "up") {
 			(direction === "up" && wrapStart === 0 && currentLine === 0)
 		) { return; }
 
-		if (!isMoving) {
-			isMoving = true;
-			desiredColumn = editor.selection.active.character - wrapStart;
+		if (!this.isMoving) {
+			this.isMoving = true;
+			this.desiredColumn = editor.selection.active.character - wrapStart;
 		}
 
-		await vscode.commands.executeCommand(
-			direction === "down" ? "cursorDown" : "cursorUp"
-		);
-		await adjustCursorToColumn(editor, desiredColumn);
-	} finally {
-		endProgrammaticMove();
+		await this.doDefaultCursorMove(direction);
+		await this.adjustCursorToColumn(editor, this.desiredColumn);
 	}
-}
 
-function registerListeners(context: vscode.ExtensionContext) {
-	const update = async () => {
-		if (!isInProgrammaticMove()) {
-			isMoving = false;
-			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.selection.active.character === 0) { return; }
-			if (!isInInsertMode(editor)) { await snapCursorInsideLine(editor); }
-		}
-	};
+	public registerListeners(context: vscode.ExtensionContext) {
+		const update = async () => {
+			if (!this.isInProgrammaticMove()) {
+				this.isMoving = false;
+				if (this.isInSafeMove()) { return; }
+				const editor = vscode.window.activeTextEditor;
+				if (!editor || editor.selection.active.character === 0) { return; }
+				if (!isInInsertMode(editor)) { await this.snapCursorInsideLine(editor); }
+			}
+		};
 
-	context.subscriptions.push(
-		vscode.window.onDidChangeTextEditorSelection(update),
-		// vscode.window.onDidChangeTextEditorVisibleRanges(update),
-		// vscode.window.onDidChangeActiveTextEditor(update)
-	);
-}
+		context.subscriptions.push(
+			vscode.window.onDidChangeTextEditorSelection(update),
+			// vscode.window.onDidChangeTextEditorVisibleRanges(update),
+			// vscode.window.onDidChangeActiveTextEditor(update)
+		);
+	}
 
-/** Helper Functions */
-
-function isInInsertMode(editor: vscode.TextEditor): boolean {
-	return editor.options.cursorStyle === vscode.TextEditorCursorStyle.Line;
-}
-
-function isSingleSelection(editor: vscode.TextEditor): boolean {
-	return editor.selections.length === 1;
-}
-
-async function adjustCursorToColumn(editor: vscode.TextEditor, column: number): Promise<void> {
-	try {
-		beginProgrammaticMove();
-		const [wrapStart, wrapEnd] = await getWrappedLineBeginEnd(editor);
+	private async adjustCursorToColumn(editor: vscode.TextEditor, column: number): Promise<void> {
+		const [wrapStart, wrapEnd] = await this.getWrappedLineBeginEnd(editor);
 
 		const selectionBeforeAdjustment = editor.selection;
 		const newPos = new vscode.Position(
@@ -106,70 +120,59 @@ async function adjustCursorToColumn(editor: vscode.TextEditor, column: number): 
 			)
 		);
 		const selectionAfterAdjustment = new vscode.Selection(newPos, newPos);
-		await updateSelection(editor, selectionAfterAdjustment);
-	} finally {
-		endProgrammaticMove();
+		await this.updateSelection(editor, selectionAfterAdjustment);
 	}
-}
 
-// VS Code does not provide a straightforward way to get the wrapped line beginning/ending character. This is a hack.
-async function getWrappedLineBeginEnd(editor: vscode.TextEditor): Promise<[number, number]> {
-	try { 
-		beginProgrammaticMove();
+	// VS Code does not provide a straightforward way to get the wrapped line beginning/ending character. This is a hack.
+	private async getWrappedLineBeginEnd(editor: vscode.TextEditor): Promise<[number, number]> {
 		const originalSelection = editor.selection;
 		const beginEndPosition: [number, number] = [0, 0];
 
-		await vscode.commands.executeCommand(
-			"cursorMove",
-			{ "to": "wrappedLineStart" }
-		);
+		await this.doDefaultCursorMove("wrappedLineStart");
 		beginEndPosition[0] = editor.selection.active.character;
 
-		await vscode.commands.executeCommand(
-			"cursorMove",
-			{ "to": "wrappedLineEnd" }
-		);
+		await this.doDefaultCursorMove("wrappedLineEnd");
 		beginEndPosition[1] = editor.selection.active.character;
 
-		await updateSelection(editor, originalSelection);
+		await this.updateSelection(editor, originalSelection);
 		return beginEndPosition;
-	} finally {
-		endProgrammaticMove();
 	}
-}
 
-// Again, we can't check for hanging cursors easily. This is also a hack.
-async function snapCursorInsideLine(editor: vscode.TextEditor): Promise<void> {
-	try {
-		beginProgrammaticMove();
+	// Again, we can't check for hanging cursors easily. This is also a hack.
+	private async snapCursorInsideLine(editor: vscode.TextEditor): Promise<void> {
 		const originalSelection = editor.selection;
-		await vscode.commands.executeCommand(
-			"cursorMove",
-			{ "to": "wrappedLineEnd" }
-		);
+		await this.doDefaultCursorMove("wrappedLineEnd");
 		const endSelection = editor.selection;
 
 		if (originalSelection.isEqual(endSelection)) {
-			// We use command here instead of directly setting the variable, so we avoid one more use of updateSelection().
-			await vscode.commands.executeCommand("cursorLeft");
+			await this.doDefaultCursorMove("left");
 		} else {
-			await updateSelection(editor, originalSelection);
+			await this.updateSelection(editor, originalSelection);
 		}
-	} finally {
-		endProgrammaticMove();
 	}
-}
 
-// Helper async function to wait for cursor update before running the next lines. This is used in programmaticMoves so the VS Code tick does not accidentally trigger selection change again after programmaticMove is closed.
-async function updateSelection(editor: vscode.TextEditor, selection: vscode.Selection): Promise<void> {
-	const originalSelection = editor.selection;
-	editor.selection = selection;
-	if (originalSelection.isEqual(selection)) {
-		await new Promise<void>(resolve => {
-			const disposable = vscode.window.onDidChangeTextEditorSelection(() => {
-				disposable.dispose();
-				resolve();
+	private async updateSelection(editor: vscode.TextEditor, selection: vscode.Selection): Promise<void> {
+		await this.doProgrammaticMove(async () => {
+			const originalSelection = editor.selection;
+			if (originalSelection.isEqual(selection)) { return; }
+
+			editor.selection = selection;
+			await new Promise<void>(resolve => {
+				const disposable = vscode.window.onDidChangeTextEditorSelection(() => {
+					disposable.dispose();
+					resolve();
+				});
 			});
 		});
 	}
+}
+
+/** Helper Functions */
+
+function isInInsertMode(editor: vscode.TextEditor): boolean {
+	return editor.options.cursorStyle === vscode.TextEditorCursorStyle.Line;
+}
+
+function isSingleSelection(editor: vscode.TextEditor): boolean {
+	return editor.selections.length === 1;
 }
