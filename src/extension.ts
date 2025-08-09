@@ -10,12 +10,6 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand("vimWrapped.cursorUp", async () => {
             await mover.moveCursorLineWrapped("up");
         }),
-        // Support for my vim-qol fork.
-        vscode.commands.registerCommand("vimWrapped.safeType", async (args) => {
-            await mover.doSafeMove(async () => {
-                await vscode.commands.executeCommand("vim.type", args);
-            });
-        })
     );
 
     mover.registerListeners(context);
@@ -89,20 +83,24 @@ class WrappedLineMover {
     }
 
     public registerListeners(context: vscode.ExtensionContext) {
-        const update = async () => {
+        const update = async (snapCursor: boolean) => {
             if (!this.isInProgrammaticMove()) {
                 this.isMoving = false;
                 if (this.isInSafeMove()) { return; }
                 const editor = vscode.window.activeTextEditor;
                 if (!editor || editor.selection.active.character === 0) { return; }
-                if (!isInInsertMode(editor)) { await this.snapCursorInsideLine(editor); }
+                if (!isInInsertMode(editor) && snapCursor) {
+                    await this.snapCursorInsideLine(editor);
+                }
             }
         };
 
         context.subscriptions.push(
-            vscode.window.onDidChangeTextEditorSelection(update),
-            // vscode.window.onDidChangeTextEditorVisibleRanges(update),
-            // vscode.window.onDidChangeActiveTextEditor(update)
+            vscode.window.onDidChangeTextEditorSelection(e => {
+                update(e.kind === vscode.TextEditorSelectionChangeKind.Mouse);
+            }),
+            vscode.window.onDidChangeTextEditorVisibleRanges(e => update(false)),
+            vscode.window.onDidChangeActiveTextEditor(e => update(false))
         );
     }
 
@@ -114,7 +112,7 @@ class WrappedLineMover {
         const line = editor.document.lineAt(lineNumber).text;
         const newPos = new vscode.Position(
             lineNumber,
-            getCharacterFromColumn(line, wrapStart, wrapEnd, this.desiredColumn)
+            getCharacterFromColumn(line, wrapStart, wrapEnd, column)
         );
         const selectionAfterAdjustment = new vscode.Selection(newPos, newPos);
         await this.updateSelection(editor, selectionAfterAdjustment);
@@ -207,9 +205,9 @@ function getColumnFromCharacter(line: string, wrapStart: number, at: number): nu
 function getCharacterFromColumn(line: string, wrapStart: number, wrapEnd: number, column: number): number {
     let count = 0;
     let index = wrapStart;
-    while (index < line.length && count < column) {
+    while (index < wrapEnd && count < column) {
         if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(index))) { count++; }
         index++;
     }
-    if (count === column) { return index - 1; } else { return wrapEnd - 1; }
+    return index - 1;
 }
