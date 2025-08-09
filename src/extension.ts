@@ -1,15 +1,16 @@
 import * as vscode from 'vscode';
 
+/**
+ * Extension to enhance Vim extension's wrapped line cursor movements.
+ * Fixes cursor column tracking with wrapped lines and avoids
+ * leaving the cursor at the very end of wrapped lines.
+ */
 export function activate(context: vscode.ExtensionContext) {
     const mover = new WrappedLineMover();
 
     context.subscriptions.push(
-        vscode.commands.registerCommand("vimWrapped.cursorDown", async () => {
-            await mover.moveCursorLineWrapped("down");
-        }),
-        vscode.commands.registerCommand("vimWrapped.cursorUp", async () => {
-            await mover.moveCursorLineWrapped("up");
-        }),
+        vscode.commands.registerCommand("vimWrapped.cursorDown", () => mover.moveCursorLineWrapped("down")),
+        vscode.commands.registerCommand("vimWrapped.cursorUp", () => mover.moveCursorLineWrapped("up")),
     );
 
     mover.registerListeners(context);
@@ -18,64 +19,51 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 class WrappedLineMover {
-    private desiredColumn: number = 0;
-    private isMoving: boolean = false;
-    private programmaticMoveCounter: number = 0;
-    private safeMoveCounter: number = 0;
+    private desiredColumn = 0;
+    private isMoving = false;
+    private programmaticMoveCount = 0;
 
-    private isInProgrammaticMove(): boolean {
-        return this.programmaticMoveCounter > 0;
+    private isInProgrammaticMove() {
+        return this.programmaticMoveCount > 0;
     }
 
-    private isInSafeMove(): boolean {
-        return this.safeMoveCounter > 0;
-    }
-
-    private async doProgrammaticMove(action: () => Promise<void>) {
+    private async runProgrammaticMove(action: () => Thenable<void>) {
+        this.programmaticMoveCount++;
         try {
-            this.programmaticMoveCounter++;
             await action();
         } finally {
-            this.programmaticMoveCounter = Math.max(0, this.programmaticMoveCounter - 1);
+            this.programmaticMoveCount = Math.max(0, this.programmaticMoveCount - 1);
         }
     }
 
-    public async doSafeMove(action: () => Promise<void>) {
-        try {
-            this.programmaticMoveCounter++;
-            await action();
-        } finally {
-            this.programmaticMoveCounter = Math.max(0, this.programmaticMoveCounter - 1);
-        }
+    private async doDefaultCursorMove(to:
+        "up" | "down" | "left" | "right" | "wrappedLineStart" | "wrappedLineEnd"
+    ) {
+        await this.runProgrammaticMove(() =>
+            vscode.commands.executeCommand("cursorMove", { to, by: "wrappedLine" })
+        );
     }
 
-
-    private async doDefaultCursorMove(to: string) {
-        await this.doProgrammaticMove(async () => {
-            await vscode.commands.executeCommand(
-                "cursorMove",
-                { "to": to, "by": "wrappedLine" }
-            );
-        });
-    }
-
-    public async moveCursorLineWrapped(direction: "down" | "up") {
+    public async moveCursorLineWrapped(direction: "up" | "down") {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !isSingleSelection(editor)) { return; }
 
-        const [wrapStart, wrapEnd] = await this.getWrappedLineBeginEnd(editor);	
-        const lineNumber = editor.selection.active.line;
+        const [wrapStart, wrapEnd] = await this.getWrappedLineBounds(editor);
+        const lineNum = editor.selection.active.line;
+        const line = editor.document.lineAt(lineNum).text;
         const totalLines = editor.document.lineCount;
-        const line = editor.document.lineAt(lineNumber).text;
-        
+
+        // Stop if at document boundary and cursor at line start/end
         if (
-            (direction === "down" && wrapEnd === line.length && lineNumber >= totalLines - 1) ||
-            (direction === "up" && wrapStart === 0 && lineNumber === 0)
+            (direction === "down" && wrapEnd === line.length && lineNum >= totalLines - 1) ||
+            (direction === "up" && wrapStart === 0 && lineNum === 0)
         ) { return; }
 
         if (!this.isMoving) {
             this.isMoving = true;
-            this.desiredColumn = getColumnFromCharacter(line, wrapStart, editor.selection.active.character);
+            this.desiredColumn = getColumnFromCharacter(
+                line, wrapStart, editor.selection.active.character
+            );
         }
 
         await this.doDefaultCursorMove(direction);
@@ -84,73 +72,65 @@ class WrappedLineMover {
 
     public registerListeners(context: vscode.ExtensionContext) {
         const update = async (snapCursor: boolean) => {
-            if (!this.isInProgrammaticMove()) {
-                this.isMoving = false;
-                if (this.isInSafeMove()) { return; }
-                const editor = vscode.window.activeTextEditor;
-                if (!editor || editor.selection.active.character === 0) { return; }
-                if (!isInInsertMode(editor) && snapCursor) {
-                    await this.snapCursorInsideLine(editor);
-                }
+            if (this.isInProgrammaticMove()) { return; }
+
+            this.isMoving = false;
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || editor.selection.active.character === 0) { return; }
+
+            if (!isInInsertMode(editor) && snapCursor) {
+                await this.snapCursorInsideWrappedLine(editor);
             }
         };
 
         context.subscriptions.push(
-            vscode.window.onDidChangeTextEditorSelection(e => {
-                update(e.kind === vscode.TextEditorSelectionChangeKind.Mouse);
-            }),
-            vscode.window.onDidChangeTextEditorVisibleRanges(e => update(false)),
-            vscode.window.onDidChangeActiveTextEditor(e => update(false))
+            vscode.window.onDidChangeTextEditorSelection(e => update(e.kind === vscode.TextEditorSelectionChangeKind.Mouse)),
+            vscode.window.onDidChangeTextEditorVisibleRanges(() => update(false)),
+            vscode.window.onDidChangeActiveTextEditor(() => update(false)),
         );
     }
 
-    private async adjustCursorToColumn(editor: vscode.TextEditor, column: number): Promise<void> {
-        const [wrapStart, wrapEnd] = await this.getWrappedLineBeginEnd(editor);
+    private async adjustCursorToColumn(editor: vscode.TextEditor, column: number) {
+        const [wrapStart, wrapEnd] = await this.getWrappedLineBounds(editor);
+        const lineNum = editor.selection.active.line;
+        const line = editor.document.lineAt(lineNum).text;
 
-        const selectionBeforeAdjustment = editor.selection;
-        const lineNumber = selectionBeforeAdjustment.active.line;
-        const line = editor.document.lineAt(lineNumber).text;
-        const newPos = new vscode.Position(
-            lineNumber,
-            getCharacterFromColumn(line, wrapStart, wrapEnd, column)
-        );
-        const selectionAfterAdjustment = new vscode.Selection(newPos, newPos);
-        await this.updateSelection(editor, selectionAfterAdjustment);
+        const charPos = getCharacterFromColumn(line, wrapStart, wrapEnd, column);
+        const newPos = new vscode.Position(lineNum, charPos);
+        const newSelection = new vscode.Selection(newPos, newPos);
+
+        await this.updateSelection(editor, newSelection);
     }
 
-    // VS Code does not provide a straightforward way to get the wrapped line beginning/ending character. This is a hack.
-    private async getWrappedLineBeginEnd(editor: vscode.TextEditor): Promise<[number, number]> {
+    private async getWrappedLineBounds(editor: vscode.TextEditor): Promise<[number, number]> {
         const originalSelection = editor.selection;
-        const beginEndPosition: [number, number] = [0, 0];
 
         await this.doDefaultCursorMove("wrappedLineStart");
-        beginEndPosition[0] = editor.selection.active.character;
+        const startChar = editor.selection.active.character;
 
         await this.doDefaultCursorMove("wrappedLineEnd");
-        beginEndPosition[1] = editor.selection.active.character;
+        const endChar = editor.selection.active.character;
 
         await this.updateSelection(editor, originalSelection);
-        return beginEndPosition;
+        return [startChar, endChar];
     }
 
-    // Again, we can't check for hanging cursors easily. This is also a hack.
-    private async snapCursorInsideLine(editor: vscode.TextEditor): Promise<void> {
+    private async snapCursorInsideWrappedLine(editor: vscode.TextEditor) {
         const originalSelection = editor.selection;
+
         await this.doDefaultCursorMove("wrappedLineEnd");
         const endSelection = editor.selection;
 
         if (originalSelection.isEqual(endSelection)) {
-            // Might change to vim.type "h".
             await this.doDefaultCursorMove("left");
         } else {
             await this.updateSelection(editor, originalSelection);
         }
     }
 
-    private async updateSelection(editor: vscode.TextEditor, selection: vscode.Selection): Promise<void> {
-        await this.doProgrammaticMove(async () => {
-            const originalSelection = editor.selection;
-            if (originalSelection.isEqual(selection)) { return; }
+    private async updateSelection(editor: vscode.TextEditor, selection: vscode.Selection) {
+        await this.runProgrammaticMove(async () => {
+            if (editor.selection.isEqual(selection)) { return; }
 
             editor.selection = selection;
             await new Promise<void>(resolve => {
@@ -163,7 +143,7 @@ class WrappedLineMover {
     }
 }
 
-/** Helper Functions */
+/** Helpers */
 
 function isInInsertMode(editor: vscode.TextEditor): boolean {
     return editor.options.cursorStyle === vscode.TextEditorCursorStyle.Line;
@@ -173,30 +153,18 @@ function isSingleSelection(editor: vscode.TextEditor): boolean {
     return editor.selections.length === 1;
 }
 
-/** Thai Support */
+/** Thai Character Handling */
 
-const THAI_NON_BASE_CODES: number[] = [
-    '่',
-    '้',
-    '๊',
-    '๋', // Tone marks
-    'ิ',
-    'ี',
-    'ื',
-    'ั',
-    'ํ',
-    '์',
-    '็', // Ascenders
-    'ุ',
-    'ู', // Descenders
-    'ำ',
-    // ำ is special. May or may not want.
-    // Could mess with column alignment if included, but mess with cursor flow if not.
-].map((char) => char.charCodeAt(0));
+const THAI_NON_BASE_CODES = [
+    '่', '้', '๊', '๋', // Tone marks
+    'ิ', 'ี', 'ื', 'ั', 'ํ', '์', '็', // Ascenders
+    'ุ', 'ู', // Descenders
+    'ำ', // Special vowel
+].map(c => c.charCodeAt(0));
 
-function getColumnFromCharacter(line: string, wrapStart: number, at: number): number {
+function getColumnFromCharacter(line: string, wrapStart: number, pos: number): number {
     let count = 0;
-    for (let i = wrapStart; i <= at; i++) {
+    for (let i = wrapStart; i <= pos; i++) {
         if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(i))) { count++; }
     }
     return count;
