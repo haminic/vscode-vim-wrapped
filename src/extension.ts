@@ -122,7 +122,12 @@ class WrappedLineMover {
         const endSelection = editor.selection;
 
         if (originalSelection.isEqual(endSelection)) {
-            await this.doDefaultCursorMove("left");
+            const lineNum = endSelection.active.line;
+            const line = editor.document.lineAt(lineNum).text;
+            const newPos = new vscode.Position(
+                lineNum, getLeftColumnCharacter(line, endSelection.active.character)
+            ); 
+            await this.updateSelection(editor, new vscode.Selection(newPos, newPos));
         } else {
             await this.updateSelection(editor, originalSelection);
         }
@@ -162,9 +167,9 @@ const THAI_NON_BASE_CODES = [
     'ำ', // Special vowel
 ].map(c => c.charCodeAt(0));
 
-function getColumnFromCharacter(line: string, wrapStart: number, pos: number): number {
+function getColumnFromCharacter(line: string, wrapStart: number, character: number): number {
     let count = 0;
-    for (let i = wrapStart; i <= pos; i++) {
+    for (let i = wrapStart; i <= character; i++) {
         if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(i))) { count++; }
     }
     return count;
@@ -173,9 +178,22 @@ function getColumnFromCharacter(line: string, wrapStart: number, pos: number): n
 function getCharacterFromColumn(line: string, wrapStart: number, wrapEnd: number, column: number): number {
     let count = 0;
     let index = wrapStart;
+    let lastColumnCharacter = wrapStart;
     while (index < wrapEnd && count < column) {
-        if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(index))) { count++; }
+        if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(index))) {
+            lastColumnCharacter = index;
+            count++;
+        }
         index++;
     }
-    return index - 1;
+    return lastColumnCharacter;
+}
+
+function getLeftColumnCharacter(line: string, character: number) {
+    let index = character - 1;
+    while (index > 0) {
+        if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(index))) { break; }
+        index--;
+    }
+    return index;
 }
