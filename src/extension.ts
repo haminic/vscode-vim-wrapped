@@ -36,8 +36,8 @@ class WrappedLineMover {
         }
     }
 
-    private async doDefaultCursorMove(to:
-        "up" | "down" | "left" | "right" | "wrappedLineStart" | "wrappedLineEnd"
+    private async doDefaultCursorMove(
+        to: "up" | "down" | "left" | "right" | "wrappedLineStart" | "wrappedLineEnd"
     ) {
         await this.runProgrammaticMove(() =>
             vscode.commands.executeCommand("cursorMove", { to, by: "wrappedLine" })
@@ -103,6 +103,10 @@ class WrappedLineMover {
     }
 
     private async getWrappedLineBounds(editor: vscode.TextEditor): Promise<[number, number]> {
+        // Actually not sure why this doesn't need to be reverted back.
+        // Probably from vim's code (?)
+        editor.options.cursorStyle = vscode.TextEditorCursorStyle.LineThin;
+
         const originalSelection = editor.selection;
 
         await this.doDefaultCursorMove("wrappedLineStart");
