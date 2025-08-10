@@ -1,5 +1,5 @@
 {
-  "name": "vim_wrapped",
+  "name": "vim-wrapped",
   "displayName": "Vim Wrapped",
   "description": "Adds commands for better line wrapped vim motions.",
   "version": "0.0.1",
