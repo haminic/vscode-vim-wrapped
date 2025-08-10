@@ -62,7 +62,7 @@ class WrappedLineMover {
         if (!this.isMoving) {
             this.isMoving = true;
             this.desiredColumn = getColumnFromCharacter(
-                line, wrapStart, editor.selection.active.character
+                line, wrapStart, editor.selection.active.character, editor.options.tabSize
             );
         }
 
@@ -97,7 +97,9 @@ class WrappedLineMover {
         const lineNum = editor.selection.active.line;
         const line = editor.document.lineAt(lineNum).text;
 
-        const charPos = getCharacterFromColumn(line, wrapStart, wrapEnd, column);
+        const charPos = getCharacterFromColumn(
+            line, wrapStart, wrapEnd, column, editor.options.tabSize
+        );
         const newPos = new vscode.Position(lineNum, charPos);
         const newSelection = new vscode.Selection(newPos, newPos);
 
@@ -168,24 +170,31 @@ function isSingleSelection(editor: vscode.TextEditor): boolean {
 
 const THAI_NON_BASE_CODES = [
     '่', '้', '๊', '๋', // Tone marks
-    'ิ', 'ี', 'ื', 'ั', 'ํ', '์', '็', // Ascenders
+    'ิ', 'ี', 'ื', 'ั', 'ํ', '์', '็', 'ึ', // Ascenders
     'ุ', 'ู', // Descenders
     'ำ', // Special vowel
 ].map(c => c.charCodeAt(0));
 
-function getColumnFromCharacter(line: string, wrapStart: number, character: number): number {
+function getColumnFromCharacter(line: string, wrapStart: number, character: number, tabSize: number | string | undefined): number {
+    const actualTabSize = (typeof(tabSize) === "number") ? tabSize : 0;
     let count = 0;
     for (let i = wrapStart; i <= character; i++) {
         if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(i))) { count++; }
     }
-    return count;
+    let indentationFix = 0;
+    if (wrapStart !== 0) { indentationFix = countInitialSpaces(line, actualTabSize); }
+    return count + indentationFix;
 }
 
-function getCharacterFromColumn(line: string, wrapStart: number, wrapEnd: number, column: number): number {
-    let count = 0;
+function getCharacterFromColumn(line: string, wrapStart: number, wrapEnd: number, column: number, tabSize: number | string | undefined): number {
+    const actualTabSize = (typeof(tabSize) === "number") ? tabSize : 0;
+    let indentationFix = 0;
+    if (wrapStart !== 0) { indentationFix = countInitialSpaces(line, actualTabSize); }
+    let count = indentationFix;
     let index = wrapStart;
     let lastColumnCharacter = wrapStart;
-    while (index < wrapEnd && count < column) {
+    while (count < column) {
+        if (index >= wrapEnd) { return lastColumnCharacter; }
         if (!THAI_NON_BASE_CODES.includes(line.charCodeAt(index))) {
             lastColumnCharacter = index;
             count++;
@@ -193,6 +202,16 @@ function getCharacterFromColumn(line: string, wrapStart: number, wrapEnd: number
         index++;
     }
     return lastColumnCharacter;
+}
+
+function countInitialSpaces(str: string, tabsize: number): number {
+  let count = 0;
+  for (const char of str) {
+    if (char === ' ') { count++; }
+    else if (char === '\t') { count += tabsize; }
+    else { break; }
+  }
+  return count;
 }
 
 function getLeftColumnCharacter(line: string, character: number) {
