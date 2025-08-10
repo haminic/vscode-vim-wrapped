@@ -77,18 +77,23 @@ class WrappedLineMover {
             this.isMoving = false;
             const editor = vscode.window.activeTextEditor;
             if (!editor || editor.selection.active.character === 0) { return; }
-
+            
             if (!isInInsertMode(editor) && snapCursor) {
+                // Hack to avoid clashing with VS Code Vim (there's probably a better way)
+                if (
+                    editor.document.lineAt(editor.selection.active.line).text.length <=
+                    editor.selection.active.character
+                ) { return; }
                 await this.snapCursorInsideWrappedLine(editor);
             }
         };
 
         context.subscriptions.push(
-            vscode.window.onDidChangeTextEditorSelection(e => update(
+            vscode.window.onDidChangeTextEditorSelection(async e => await update(
                 e.kind === vscode.TextEditorSelectionChangeKind.Mouse && isSingleSelection(e.textEditor)
             )),
-            vscode.window.onDidChangeTextEditorVisibleRanges(() => update(false)),
-            vscode.window.onDidChangeActiveTextEditor(() => update(false)),
+            vscode.window.onDidChangeTextEditorVisibleRanges(async () => await update(false)),
+            vscode.window.onDidChangeActiveTextEditor(async () => await update(false)),
         );
     }
 
