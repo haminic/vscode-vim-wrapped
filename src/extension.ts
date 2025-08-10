@@ -84,7 +84,9 @@ class WrappedLineMover {
         };
 
         context.subscriptions.push(
-            vscode.window.onDidChangeTextEditorSelection(e => update(e.kind === vscode.TextEditorSelectionChangeKind.Mouse)),
+            vscode.window.onDidChangeTextEditorSelection(e => update(
+                e.kind === vscode.TextEditorSelectionChangeKind.Mouse && isSingleSelection(e.textEditor)
+            )),
             vscode.window.onDidChangeTextEditorVisibleRanges(() => update(false)),
             vscode.window.onDidChangeActiveTextEditor(() => update(false)),
         );
@@ -159,7 +161,7 @@ function isInInsertMode(editor: vscode.TextEditor): boolean {
 }
 
 function isSingleSelection(editor: vscode.TextEditor): boolean {
-    return editor.selections.length === 1;
+    return editor.selections.length === 1 && editor.selection.isEmpty;
 }
 
 /** Thai Character Handling */
