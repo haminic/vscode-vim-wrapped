@@ -48,6 +48,7 @@ class WrappedLineMover {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !isSingleSelection(editor)) { return; }
 
+        editor.options.cursorStyle = vscode.TextEditorCursorStyle.LineThin;
         const [wrapStart, wrapEnd] = await this.getWrappedLineBounds(editor);
         const lineNum = editor.selection.active.line;
         const line = editor.document.lineAt(lineNum).text;
@@ -68,6 +69,7 @@ class WrappedLineMover {
 
         await this.doDefaultCursorMove(direction);
         await this.adjustCursorToColumn(editor, this.desiredColumn);
+        editor.options.cursorStyle = vscode.TextEditorCursorStyle.Block;
     }
 
     public registerListeners(context: vscode.ExtensionContext) {
@@ -112,8 +114,6 @@ class WrappedLineMover {
     }
 
     private async getWrappedLineBounds(editor: vscode.TextEditor): Promise<[number, number]> {
-        editor.options.cursorStyle = vscode.TextEditorCursorStyle.LineThin;
-
         const originalSelection = editor.selection;
 
         await this.doDefaultCursorMove("wrappedLineStart");
@@ -123,8 +123,6 @@ class WrappedLineMover {
         const endChar = editor.selection.active.character;
 
         await this.updateSelection(editor, originalSelection);
-        editor.options.cursorStyle = vscode.TextEditorCursorStyle.Block;
-
         return [startChar, endChar];
     }
 
